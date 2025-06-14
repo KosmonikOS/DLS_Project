@@ -111,11 +111,10 @@ async def ingest_bib_async(
 
     with tqdm(total=len(entries), desc="Ingesting PDF batches", unit="doc") as progress:
         for batch_entries in batched(entries, batch_size):
-            progress.update(len(batch_entries))
             docs = await _process_batch(list(batch_entries), concurrency)
             if docs:
                 indexer.index_documents(index_name, docs, batch_size=len(docs))
-            progress.update(batch_size)
+            progress.update(len(batch_entries))
 
 
 def ingest_bib(

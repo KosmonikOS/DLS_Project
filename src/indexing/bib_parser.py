@@ -15,6 +15,7 @@ from pybtex.database import parse_file
 from src.indexing.entities import BibEntry
 
 _LATEX_PATTERN = re.compile(r"[{}]")
+_MATH_PATTERN = re.compile(r"(\\\[.*?\\\]|\\\(.*?\\\)|\$\$.*?\$\$|\$.*?\$)", re.DOTALL)
 
 
 def latex_to_unicode(text: str | None) -> str | None:
@@ -25,6 +26,9 @@ def latex_to_unicode(text: str | None) -> str | None:
     """
     if text is None:
         return None
+    # drop inline / display math – keeps titles readable like "MDC^3:" -> "MDC:".
+    text = _MATH_PATTERN.sub("", text)
+
     try:
         return codecs.decode(text, "latex")
     except Exception:
