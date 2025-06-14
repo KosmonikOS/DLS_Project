@@ -1,9 +1,5 @@
 """entities.py
 Shared type definitions used across the ingestion pipeline.
-
-Public API:
-    • IndexedDocument – canonical mapping stored in Elasticsearch.
-    • BibEntry        – minimal metadata extracted from a BibTeX record.
 """
 
 from __future__ import annotations

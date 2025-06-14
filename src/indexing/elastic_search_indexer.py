@@ -1,9 +1,6 @@
 """elastic_search_indexer.py
 A lightweight wrapper around the official Elasticsearch Python client that
 simplifies BM25-based indexing.
-
-Public API:
-    • BM25Indexer
 """
 
 from __future__ import annotations
@@ -83,10 +80,10 @@ class ElasticSearchIndexer:
     def index_documents(
         self, index_name: str, docs: Iterable[IndexedDocument], batch_size: int = 500
     ) -> None:
-        """Bulk-index :pydata:`Document` objects.
+        """Bulk-index :pydata:Document objects.
 
         Each document is an arbitrary mapping.  At minimum it must contain a
-        ``text`` field which will be used for BM25 search.
+        text field which will be used for BM25 search.
 
         Args:
             index_name: Target index.

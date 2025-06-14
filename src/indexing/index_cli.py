@@ -1,17 +1,13 @@
-"""indexing.py
+"""index_cli.py
 Command-line entry point for PDF ingestion from BibTeX into Elasticsearch.
-
-This module only handles CLI parsing and delegates all heavy lifting to
-:pyfunc:`bib_ingest.ingest_bib_async`.
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 from pathlib import Path
 
-from src.indexing.indexing_pipeline import ingest_bib_async
+from src.indexing.indexing_pipeline import ingest_bib
 
 
 def _parse_args() -> argparse.Namespace:
@@ -28,7 +24,10 @@ def _parse_args() -> argparse.Namespace:
         "--batch-size", type=int, default=100, help="Entries per processing batch"
     )
     parser.add_argument(
-        "--concurrency", type=int, default=4, help="Concurrent downloads within a batch"
+        "--concurrency",
+        type=int,
+        default=4,
+        help="Worker processes used for PDF parsing",
     )
     parser.add_argument(
         "--max-entries",
@@ -48,21 +47,19 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:  # noqa: D401
-    """Parse CLI options and launch the ingestion coroutine."""
+def main() -> None:
+    """Parse CLI options and launch the ingestion job."""
 
     args = _parse_args()
 
-    asyncio.run(
-        ingest_bib_async(
-            bib_file=args.bib_file,
-            index_name=args.index_name,
-            batch_size=args.batch_size,
-            concurrency=args.concurrency,
-            max_entries=args.max_entries if args.max_entries > 0 else None,
-            force_delete_index=args.force_delete_index,
-            es_hosts=args.es_hosts,
-        )
+    ingest_bib(
+        bib_file=args.bib_file,
+        index_name=args.index_name,
+        batch_size=args.batch_size,
+        concurrency=args.concurrency,
+        max_entries=args.max_entries if args.max_entries > 0 else None,
+        force_delete_index=args.force_delete_index,
+        es_hosts=args.es_hosts,
     )
 
 

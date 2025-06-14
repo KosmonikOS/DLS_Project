@@ -6,7 +6,6 @@ loading BibTeX files into validated BibEntry structures.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
 import re
 import codecs
 import pandas as pd
@@ -19,10 +18,13 @@ _MATH_PATTERN = re.compile(r"(\\\[.*?\\\]|\\\(.*?\\\)|\$\$.*?\$\$|\$.*?\$)", re.
 
 
 def latex_to_unicode(text: str | None) -> str | None:
-    """Convert LaTeX-escaped *text* to Unicode.
+    """Convert LaTeX escape sequences to plain Unicode.
 
-    Falls back to simply removing curly braces if *latexcodec* is unavailable
-    (the dependency is optional).
+    Args:
+        text: A string that may contain LaTeX escapes or None.
+
+    Returns:
+        The decoded Unicode string, or None if *text* is None.
     """
     if text is None:
         return None
@@ -35,8 +37,16 @@ def latex_to_unicode(text: str | None) -> str | None:
         return _LATEX_PATTERN.sub("", text)
 
 
-def extract_bib_entries(path: Path) -> List[BibEntry]:
-    """Parse *path* and return a list of validated BibEntry dicts."""
+def extract_bib_entries(path: Path) -> list[BibEntry]:
+    """Load and validate BibTeX records.
+
+    Args:
+        path: Filesystem path to a .bib file.
+
+    Returns:
+        A list of dictionaries ready for indexing, each conforming to
+        :class:BibEntry (keys: url, title, year, author).
+    """
 
     bib_data = parse_file(str(path), bib_format="bibtex")
 
