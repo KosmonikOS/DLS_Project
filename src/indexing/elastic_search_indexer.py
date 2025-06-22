@@ -7,11 +7,27 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from elasticsearch import Elasticsearch, helpers
 from elasticsearch.exceptions import NotFoundError
-from itertools import batched
+
+# itertools.batched is available in Python 3.12+
+# For older versions (e.g. Python 9.6)
+import sys
+if sys.version_info >= (3, 12):
+    from itertools import batched
+else:
+    from itertools import islice
+    from typing import Iterable, TypeVar
+    _T = TypeVar("_T")
+    def batched(iterable: Iterable[_T], n: int) -> Iterable[tuple[_T, ...]]:
+        "batched('ABCDEFG', 3) --> ABC DEF G"
+        if n < 1:
+            raise ValueError('n must be at least one')
+        it = iter(iterable)
+        while batch := tuple(islice(it, n)):
+            yield batch
 
 from src.indexing.entities import IndexedDocument
 
@@ -40,12 +56,18 @@ class ElasticSearchIndexer:
                 f"Unable to connect to Elasticsearch at {hosts}"
             )
 
-    def create_index(self, index_name: str, force_delete: bool = False) -> None:
+    def create_index(
+        self,
+        index_name: str,
+        force_delete: bool = False,
+        embedding_dim: Optional[int] = None,
+    ) -> None:
         """Create a text index configured for BM25 similarity.
 
         Args:
             index_name: Name of the index to create.
             force_delete: Delete an existing index of the same name before creation.
+            embedding_dim: Dimension of the dense vector for embeddings.
         """
         if force_delete:
             try:
@@ -58,6 +80,19 @@ class ElasticSearchIndexer:
             logger.info("Index '%s' already exists; skipping creation.", index_name)
             return
 
+        properties: dict[str, Any] = {
+            "text": {"type": "text", "analyzer": "standard"},
+            "title": {"type": "text"},
+            "author": {"type": "text"},
+            "year": {"type": "keyword"},
+            "url": {"type": "keyword"},
+        }
+        if embedding_dim:
+            properties["text_embedding"] = {
+                "type": "dense_vector",
+                "dims": embedding_dim,
+            }
+
         body: dict[str, Any] = {
             "settings": {
                 "number_of_shards": 1,
@@ -65,13 +100,7 @@ class ElasticSearchIndexer:
             },
             "mappings": {
                 "_source": {"excludes": ["text"]},
-                "properties": {
-                    "text": {"type": "text", "analyzer": "standard"},
-                    "title": {"type": "text"},
-                    "author": {"type": "text"},
-                    "year": {"type": "keyword"},
-                    "url": {"type": "keyword"},
-                },
+                "properties": properties,
             },
         }
         self._client.indices.create(index=index_name, body=body)
