@@ -1,7 +1,7 @@
-version: '3.8'
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch-wolfi:9.0.0
+    platform: linux/arm64
     container_name: elasticsearch-dev
     environment:
       - discovery.type=single-node
@@ -14,17 +14,18 @@ services:
     networks:
       - elastic-net
 
-  kibana:
-    image: docker.elastic.co/kibana/kibana:9.0.2
-    container_name: kibana-dev
-    ports:
-      - 5601:5601
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    depends_on:
-      - elasticsearch
-    networks:
-      - elastic-net
+#  kibana:
+#    image: docker.elastic.co/kibana/kibana:9.0.2
+#    platform: linux/arm64
+#    container_name: kibana-dev
+#    ports:
+#      - 5601:5601
+#    environment:
+#      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+#    depends_on:
+#      - elasticsearch
+#    networks:
+#      - elastic-net
 
 volumes:
   esdata:
