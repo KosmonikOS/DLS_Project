@@ -1,6 +1,9 @@
-"""elastic_search_indexer.py
-A lightweight wrapper around the official Elasticsearch Python client that
-simplifies BM25-based indexing.
+"""Thin wrapper around the official Elasticsearch client.
+
+Provides two high-level operations used by the pipeline:
+
+* :py:meth:`create_index` – create a text+vector mapping with optional force-delete.
+* :py:meth:`index_documents` – stream bulk requests in configurable batches.
 """
 
 from __future__ import annotations
@@ -12,22 +15,7 @@ from typing import Any, Iterable, Optional
 from elasticsearch import Elasticsearch, helpers
 from elasticsearch.exceptions import NotFoundError
 
-# itertools.batched is available in Python 3.12+
-# For older versions (e.g. Python 9.6)
-import sys
-if sys.version_info >= (3, 12):
-    from itertools import batched
-else:
-    from itertools import islice
-    from typing import Iterable, TypeVar
-    _T = TypeVar("_T")
-    def batched(iterable: Iterable[_T], n: int) -> Iterable[tuple[_T, ...]]:
-        "batched('ABCDEFG', 3) --> ABC DEF G"
-        if n < 1:
-            raise ValueError('n must be at least one')
-        it = iter(iterable)
-        while batch := tuple(islice(it, n)):
-            yield batch
+from itertools import batched
 
 from src.indexing.entities import IndexedDocument
 

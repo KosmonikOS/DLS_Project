@@ -1,22 +1,22 @@
-"""indexing_pipeline.py
-End-to-end pipeline for ingesting scholarly PDFs listed in a BibTeX file into
-an Elasticsearch index using BM25 similarity.
+"""PDF ingestion → embedding → Elasticsearch indexing pipeline.
 
-The flow is:
-    1. Read a .bib file and extract entries containing a URL.
-    2. Split entries into batches.
-    3. For each batch, asynchronously download the PDFs and parse their text.
-    4. Index the extracted text into Elasticsearch via BM25Indexer.
+Workflow
+---------
+1. Read the BibTeX file specified by ``BIB_FILE``.
+2. Download every referenced PDF (multiprocess via Docling).
+3. Convert each PDF to Markdown and embed its full text with
+   :class:`src.common.dense_embedder.DenseEmbedder`.
+4. Create the target ES index – mapping includes a `dense_vector` field sized
+   to the embedding dimension.
+5. Bulk-index ``text``, metadata, and ``text_embedding``.
 
-All heavy blocking operations (PDF parsing and Elasticsearch I/O) are delegated
-to background threads to keep the event loop responsive.
+Environment variables are consumed via :pyfile:`src.indexing.settings`.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
 from itertools import batched
 from tqdm import tqdm
@@ -25,11 +25,13 @@ from src.indexing.elastic_search_indexer import ElasticSearchIndexer
 from src.indexing.entities import IndexedDocument, BibEntry
 from src.indexing.bib_parser import extract_bib_entries
 from src.indexing.docling_parallel import convert_in_parallel, close_pool
+from src.indexing.settings import settings
+from src.common.dense_embedder import DenseEmbedder
 
 logger = logging.getLogger(__name__)
 
 
-def _process_batch(entries: list[BibEntry], workers: int) -> list[IndexedDocument]:
+def _process_batch(entries: list[BibEntry], workers: int, embedder: DenseEmbedder) -> list[IndexedDocument]:
     """Convert one batch of BibTeX entries to indexable documents.
 
     Args:
@@ -37,6 +39,7 @@ def _process_batch(entries: list[BibEntry], workers: int) -> list[IndexedDocumen
             contain at least the keys url, title, year and author.
         workers: Number of worker processes used by Docling during PDF → Markdown
             conversion.
+        embedder: DenseEmbedder instance used for embedding text.
 
     Returns:
         A list of :class:IndexedDocument dictionaries that passed conversion
@@ -53,9 +56,11 @@ def _process_batch(entries: list[BibEntry], workers: int) -> list[IndexedDocumen
     texts = convert_in_parallel(urls, workers)
 
     docs: list[IndexedDocument] = []
+    raw_texts: list[str] = []
     for entry, text in zip(entries, texts):
         if not text:
             continue
+        raw_texts.append(text)
         docs.append(
             {
                 "title": entry.get("title"),
@@ -66,29 +71,28 @@ def _process_batch(entries: list[BibEntry], workers: int) -> list[IndexedDocumen
             }
         )
 
+    if docs:
+        embeddings = embedder.embed_documents(raw_texts)
+        for doc, emb in zip(docs, embeddings):
+            doc["text_embedding"] = emb
+
     return docs
 
 
-def ingest_bib(
-    bib_file: Path,
-    index_name: str = "papers",
-    batch_size: int = 100,
-    concurrency: int = os.cpu_count() or 4,
-    force_delete_index: bool = False,
-    es_hosts: list[str] | str = "http://localhost:9200",
-    max_entries: int | None = None,
-) -> None:
-    """Ingest PDFs referenced in *bib_file* into an Elasticsearch index.
+def ingest_bib() -> None:
+    """Ingest PDFs referenced in the configured BibTeX file into Elasticsearch.
 
-    Args:
-        bib_file: Path to the input .bib file.
-        index_name: Name of the target Elasticsearch index (default: "papers").
-        batch_size: Number of BibTeX entries processed per batch (default: 100).
-        concurrency: Worker processes used for Docling conversion (default: os.cpu_count()).
-        force_delete_index: If True, delete the target index before ingestion.
-        es_hosts: A single host string or a list of hosts where Elasticsearch is running.
-        max_entries: Optional hard limit on the number of BibTeX entries to ingest.
+    All parameters are sourced from *src.indexing.settings.settings* which in turn
+    reads environment variables (or a ``.env`` file).
     """
+
+    bib_file = settings.bib_file
+    index_name = settings.index_name
+    batch_size = settings.batch_size
+    concurrency = settings.concurrency or os.cpu_count() or 4
+    force_delete_index = settings.force_delete_index
+    es_host = settings.es_host
+    max_entries = settings.max_entries
 
     entries = extract_bib_entries(bib_file)
     if max_entries is not None and max_entries > 0:
@@ -97,19 +101,34 @@ def ingest_bib(
         logger.warning("No entries with a URL found in %s", bib_file)
         return
 
-    indexer = ElasticSearchIndexer(es_hosts)
-    indexer.create_index(index_name, force_delete=force_delete_index)
+    indexer = ElasticSearchIndexer(es_host)
+    index_created = False
 
     for entry in entries:
         if not entry["url"].endswith(".pdf"):
             entry["url"] = entry["url"].rstrip("/") + ".pdf"
 
     with tqdm(total=len(entries), desc="Ingesting PDF batches", unit="doc") as progress:
+        embedder = DenseEmbedder()
         for batch_entries in batched(entries, batch_size):
-            docs = _process_batch(list(batch_entries), concurrency)
-            if docs:
-                indexer.index_documents(index_name, docs, batch_size=len(docs))
+            docs = _process_batch(list(batch_entries), concurrency, embedder)
+            if not docs:
+                progress.update(len(batch_entries))
+                continue
+
+            if not index_created:
+                dim = len(docs[0]["text_embedding"])
+                indexer.create_index(
+                    index_name, force_delete=force_delete_index, embedding_dim=dim
+                )
+                index_created = True
+
+            indexer.index_documents(index_name, docs, batch_size=len(docs))
             progress.update(len(batch_entries))
 
     # tear down worker pool
     close_pool()
+
+
+if __name__ == "__main__":
+    ingest_bib()
