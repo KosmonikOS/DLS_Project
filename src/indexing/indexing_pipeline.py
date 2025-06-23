@@ -27,6 +27,7 @@ from src.indexing.bib_parser import extract_bib_entries
 from src.indexing.docling_parallel import convert_in_parallel, close_pool
 from src.indexing.settings import settings
 from src.common.dense_embedder import DenseEmbedder
+from .parse import process_text
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ def _process_batch(entries: list[BibEntry], workers: int, embedder: DenseEmbedde
         urls.append(url)
 
     texts = convert_in_parallel(urls, workers)
+    # Clean raw Markdown text extracted from PDFs before embedding/indexing
+    texts = [process_text(t) if t else None for t in texts]
 
     docs: list[IndexedDocument] = []
     raw_texts: list[str] = []
