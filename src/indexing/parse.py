@@ -34,8 +34,13 @@ def process_text(text):
     # Keep only latin letters and whitespace
     text = re.sub(r"[^a-zA-Z\s]+", " ", text)
 
-    # Lower-case and squeeze whitespace
+    # Lower-case first
     text = text.lower()
+
+    # Remove patterns like "smith et al" (предыдущее слово + et al)
+    text = re.sub(r"\b\w+\s+et\s+al\b", " ", text)
+
+    # Сжать пробелы
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
