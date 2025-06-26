@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Dict
 
 from elasticsearch import Elasticsearch, helpers
 from elasticsearch.exceptions import NotFoundError
@@ -18,6 +18,8 @@ from elasticsearch.exceptions import NotFoundError
 from itertools import batched
 
 from src.indexing.entities import IndexedDocument
+
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,8 @@ class ElasticSearchIndexer:
             "author": {"type": "text"},
             "year": {"type": "keyword"},
             "url": {"type": "keyword"},
+            "doi": {"type": "keyword"},
+            "pagerank": {"type": "float"},
         }
         if embedding_dim:
             properties["text_embedding"] = {
@@ -119,3 +123,69 @@ class ElasticSearchIndexer:
             ]
             helpers.bulk(self._client, actions)
             logger.info("Indexed %d documents into '%s'.", len(chunk), index_name)
+
+    @staticmethod
+    def _create_synth_id(title: str | None, year: str | int | None, author: list[str] | str | None) -> str:
+        """Generate a stable synthetic identifier for a paper without DOI."""
+        title_part = (title or "").strip()[:50]
+        year_part = str(year or "")
+        first_author = ""
+        if isinstance(author, list) and author:
+            first_author = author[0]
+        elif isinstance(author, str):
+            first_author = author.split(",")[0]
+        first_author = first_author[:30]
+        base = f"{title_part}_{year_part}_{first_author}".lower().replace(" ", "_")
+        return f"SYNTH_{hashlib.md5(base.encode()).hexdigest()[:12]}"
+
+    def build_internal_id_map(
+        self,
+        index_name: str,
+        *,
+        include_fields: list[str] | None = None,
+    ) -> Dict[str, str]:
+        """Return a mapping of *internal_id -> Elasticsearch _id*.
+
+        *internal_id* is the DOI if present, otherwise a synthetic ID derived
+        from title/year/author so that every document participates in graph
+        enrichment jobs.
+        """
+
+        src_fields = ["doi", "title", "year", "author"]
+        if include_fields:
+            src_fields.extend(include_fields)
+
+        id_map: Dict[str, str] = {}
+        for hit in helpers.scan(self._client, index=index_name, _source=src_fields):
+            src = hit["_source"]
+            doc_doi = src.get("doi")
+            if doc_doi:
+                internal_id = doc_doi
+            else:
+                internal_id = self._create_synth_id(src.get("title"), src.get("year"), src.get("author"))
+
+            id_map[internal_id] = hit["_id"]
+
+        return id_map
+
+    def bulk_update_field(
+        self,
+        index_name: str,
+        id_value_map: Dict[str, float],
+        field: str = "pagerank",
+    ) -> None:
+        """Update *field* for each ES doc where `_id` is a key in id_value_map."""
+
+        actions = [
+            {
+                "_op_type": "update",
+                "_index": index_name,
+                "_id": es_id,
+                "doc": {field: value},
+            }
+            for es_id, value in id_value_map.items()
+        ]
+
+        if actions:
+            helpers.bulk(self._client, actions, refresh=True)
+            logger.info("Updated %d documents (%s field).", len(actions), field)

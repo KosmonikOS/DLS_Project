@@ -3,8 +3,8 @@
 Workflow
 ---------
 1. Read the BibTeX file specified by ``BIB_FILE``.
-2. Download every referenced PDF (multiprocess via Docling).
-3. Convert each PDF to Markdown and embed its full text with
+2. Download every referenced PDF concurrently with asynchronous HTTP requests.
+3. Extract plain text from each PDF and embed it with
    :class:`src.common.dense_embedder.DenseEmbedder`.
 4. Create the target ES index – mapping includes a `dense_vector` field sized
    to the embedding dimension.
@@ -16,30 +16,32 @@ Environment variables are consumed via :pyfile:`src.indexing.settings`.
 from __future__ import annotations
 
 import logging
-import os
+import asyncio
 
 from itertools import batched
 from tqdm import tqdm
 
+import httpx
+from httpx import Limits
+
 from src.indexing.elastic_search_indexer import ElasticSearchIndexer
 from src.indexing.entities import IndexedDocument, BibEntry
 from src.indexing.bib_parser import extract_bib_entries
-from src.indexing.docling_parallel import convert_in_parallel, close_pool
 from src.indexing.settings import settings
 from src.common.dense_embedder import DenseEmbedder
-from .parse import process_text
+from .parse import fetch_and_parse
 
 logger = logging.getLogger(__name__)
 
 
-def _process_batch(entries: list[BibEntry], workers: int, embedder: DenseEmbedder) -> list[IndexedDocument]:
+def _process_batch(
+    entries: list[BibEntry], embedder: DenseEmbedder
+) -> list[IndexedDocument]:
     """Convert one batch of BibTeX entries to indexable documents.
 
     Args:
         entries: A list of BibEntry mappings to be converted. Each entry must
             contain at least the keys url, title, year and author.
-        workers: Number of worker processes used by Docling during PDF → Markdown
-            conversion.
         embedder: DenseEmbedder instance used for embedding text.
 
     Returns:
@@ -54,9 +56,8 @@ def _process_batch(entries: list[BibEntry], workers: int, embedder: DenseEmbedde
             url = url.rstrip("/") + ".pdf"
         urls.append(url)
 
-    texts = convert_in_parallel(urls, workers)
-    # Clean raw Markdown text extracted from PDFs before embedding/indexing
-    texts = [process_text(t) if t else None for t in texts]
+    # Download and parse PDFs concurrently
+    texts = asyncio.run(fetch_and_parse(urls))
 
     docs: list[IndexedDocument] = []
     raw_texts: list[str] = []
@@ -70,6 +71,7 @@ def _process_batch(entries: list[BibEntry], workers: int, embedder: DenseEmbedde
                 "year": entry.get("year"),
                 "url": entry.get("url"),
                 "author": entry.get("author"),
+                "doi": entry.get("doi"),
                 "text": text,
             }
         )
@@ -92,7 +94,6 @@ def ingest_bib() -> None:
     bib_file = settings.bib_file
     index_name = settings.index_name
     batch_size = settings.batch_size
-    concurrency = settings.concurrency or os.cpu_count() or 4
     force_delete_index = settings.force_delete_index
     es_host = settings.es_host
     max_entries = settings.max_entries
@@ -114,7 +115,7 @@ def ingest_bib() -> None:
     with tqdm(total=len(entries), desc="Ingesting PDF batches", unit="doc") as progress:
         embedder = DenseEmbedder()
         for batch_entries in batched(entries, batch_size):
-            docs = _process_batch(list(batch_entries), concurrency, embedder)
+            docs = _process_batch(list(batch_entries), embedder)
             if not docs:
                 progress.update(len(batch_entries))
                 continue
@@ -129,9 +130,113 @@ def ingest_bib() -> None:
             indexer.index_documents(index_name, docs, batch_size=len(docs))
             progress.update(len(batch_entries))
 
-    # tear down worker pool
-    close_pool()
+
+async def _process_batch_async(
+    entries: list[BibEntry],
+    embedder: DenseEmbedder,
+    client: httpx.AsyncClient,
+) -> list[IndexedDocument]:
+    """Convert one batch of BibTeX entries to indexable documents.
+
+    Args:
+        entries: A list of BibEntry mappings to be converted. Each entry must
+            contain at least the keys url, title, year and author.
+        embedder: DenseEmbedder instance used for embedding text.
+        client: httpx.AsyncClient instance used for downloading PDFs.
+
+    Returns:
+        A list of :class:IndexedDocument dictionaries that passed conversion
+        successfully (failed PDFs are silently skipped).
+    """
+
+    urls = []
+    for e in entries:
+        url = e["url"]
+        if not url.endswith(".pdf"):
+            url = url.rstrip("/") + ".pdf"
+        urls.append(url)
+
+    # Download and parse PDFs concurrently (shared HTTP client)
+    texts = await fetch_and_parse(urls, client=client)
+
+    docs: list[IndexedDocument] = []
+    raw_texts: list[str] = []
+    for entry, text in zip(entries, texts):
+        if not text:
+            continue
+        raw_texts.append(text)
+        docs.append(
+            {
+                "title": entry.get("title"),
+                "year": entry.get("year"),
+                "url": entry.get("url"),
+                "author": entry.get("author"),
+                "doi": entry.get("doi"),
+                "text": text,
+            }
+        )
+
+    if docs:
+        embeddings = embedder.embed_documents(raw_texts)
+        for doc, emb in zip(docs, embeddings):
+            doc["text_embedding"] = emb
+
+    return docs
+
+
+async def _ingest_bib_async() -> None:
+    """Async implementation of the ingestion pipeline (single event loop)."""
+
+    bib_file = settings.bib_file
+    index_name = settings.index_name
+    batch_size = settings.batch_size
+    force_delete_index = settings.force_delete_index
+    es_host = settings.es_host
+    max_entries = settings.max_entries
+
+    entries = extract_bib_entries(bib_file)
+    if max_entries is not None and max_entries > 0:
+        entries = entries[:max_entries]
+    if not entries:
+        logger.warning("No entries with a URL found in %s", bib_file)
+        return
+
+    indexer = ElasticSearchIndexer(es_host)
+    index_created = False
+
+    for entry in entries:
+        if not entry["url"].endswith(".pdf"):
+            entry["url"] = entry["url"].rstrip("/") + ".pdf"
+    embedder = DenseEmbedder()
+
+    # Shared HTTP client across all batches – HTTP/2 + keep-alive
+    async with httpx.AsyncClient(
+        http2=True,
+        limits=Limits(
+            max_connections=settings.acl_concurrency,
+            max_keepalive_connections=settings.acl_concurrency * 2,
+        ),
+    ) as client:
+        with tqdm(
+            total=len(entries), desc="Ingesting PDF batches", unit="doc"
+        ) as progress:
+            for batch_entries in batched(entries, batch_size):
+                batch_list = list(batch_entries)
+                docs = await _process_batch_async(batch_list, embedder, client)
+                if not docs:
+                    progress.update(len(batch_list))
+                    continue
+
+                if not index_created:
+                    dim = len(docs[0]["text_embedding"])
+                    indexer.create_index(
+                        index_name, force_delete=force_delete_index, embedding_dim=dim
+                    )
+                    index_created = True
+
+                indexer.index_documents(index_name, docs, batch_size=len(docs))
+                progress.update(len(batch_list))
 
 
 if __name__ == "__main__":
-    ingest_bib()
+    asyncio.run(_ingest_bib_async())

@@ -53,7 +53,9 @@ INDEX_NAME=acl-papers      # name of the ES index to create
 ES_HOST=http://localhost:9200
 # optional tuning parameters ↓
 BATCH_SIZE=200
-CONCURRENCY=8
+ACL_CONCURRENCY=4
+CROSSREF_CONCURRENCY=40
+PAGERANK_ALPHA=0.85           # damping factor for PageRank (optional)
 FORCE_DELETE_INDEX=true
 ```
 
