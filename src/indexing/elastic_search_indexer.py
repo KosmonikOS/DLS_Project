@@ -51,6 +51,8 @@ class ElasticSearchIndexer:
         index_name: str,
         force_delete: bool = False,
         embedding_dim: Optional[int] = None,
+        bm25_k1: float = 1.2,
+        bm25_b: float = 0.75,
     ) -> None:
         """Create a text index configured for BM25 similarity.
 
@@ -58,6 +60,8 @@ class ElasticSearchIndexer:
             index_name: Name of the index to create.
             force_delete: Delete an existing index of the same name before creation.
             embedding_dim: Dimension of the dense vector for embeddings.
+            bm25_k1: BM25 k1 parameter.
+            bm25_b: BM25 b parameter.
         """
         if force_delete:
             try:
@@ -89,6 +93,13 @@ class ElasticSearchIndexer:
             "settings": {
                 "number_of_shards": 1,
                 "number_of_replicas": 0,
+                "similarity": {
+                    "default": {
+                        "type": "BM25",
+                        "k1": bm25_k1,
+                        "b": bm25_b,
+                    }
+                },
             },
             "mappings": {
                 "_source": {"excludes": ["text"]},

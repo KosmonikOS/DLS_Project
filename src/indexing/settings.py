@@ -37,6 +37,10 @@ class Settings(BaseSettings):
         See :pyfile:`src.common.settings` – parameters forwarded to the embedding client.
     pagerank_alpha
         Damping factor for PageRank (probability of following citation links).
+    bm25_k1
+        BM25 similarity tuning parameter k1.
+    bm25_b
+        BM25 similarity tuning parameter b.
     """
 
     bib_file: Path = Field(..., env="BIB_FILE")
@@ -58,6 +62,14 @@ class Settings(BaseSettings):
     openai_api_key: str = Field("not-needed", env="OPENAI_API_KEY")
 
     pagerank_alpha: float = Field(0.85, env="PAGERANK_ALPHA")
+
+    # BM25 similarity tuning parameters.
+    # Refer to https://www.elastic.co/guide/en/elasticsearch/reference/current/index-modules-similarity.html#bm25-similarity
+    # These are forwarded to the index creation helper so the chosen values
+    # are baked into the index settings at creation time.
+
+    bm25_k1: float = Field(1.2, env="BM25_K1")
+    bm25_b: float = Field(0.75, env="BM25_B")
 
     class Config:
         env_file = ".env"

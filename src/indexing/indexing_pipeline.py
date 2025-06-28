@@ -123,7 +123,11 @@ def ingest_bib() -> None:
             if not index_created:
                 dim = len(docs[0]["text_embedding"])
                 indexer.create_index(
-                    index_name, force_delete=force_delete_index, embedding_dim=dim
+                    index_name,
+                    force_delete=force_delete_index,
+                    embedding_dim=dim,
+                    bm25_k1=settings.bm25_k1,
+                    bm25_b=settings.bm25_b,
                 )
                 index_created = True
 
@@ -230,7 +234,11 @@ async def _ingest_bib_async() -> None:
                 if not index_created:
                     dim = len(docs[0]["text_embedding"])
                     indexer.create_index(
-                        index_name, force_delete=force_delete_index, embedding_dim=dim
+                        index_name,
+                        force_delete=force_delete_index,
+                        embedding_dim=dim,
+                        bm25_k1=settings.bm25_k1,
+                        bm25_b=settings.bm25_b,
                     )
                     index_created = True
 
