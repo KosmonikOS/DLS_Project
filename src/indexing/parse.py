@@ -1,25 +1,35 @@
 import fitz
-import time
-import os
 import re
-from pathlib import Path
 import logging
+import asyncio
+import httpx
+
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+
+from src.indexing.settings import settings
 
 logger = logging.getLogger(__name__)
 
+
 def process_text(text):
-    
-    match = re.search(r'\\babstract\\b', text, re.IGNORECASE)
+    match = re.search(r"\\babstract\\b", text, re.IGNORECASE)
     if match:
         # Get the text *after* the word "abstract"
-        text = text[match.end():]
+        text = text[match.end() :]
 
     # Look for common footer section headers like "References", "Bibliography", "Acknowledgements".
-    footer_match = re.search(r"\n\s*(references|bibliography|acknowledgements)\b", text, re.IGNORECASE)
+    footer_match = re.search(
+        r"\n\s*(references|bibliography|acknowledgements)\b", text, re.IGNORECASE
+    )
     if footer_match:
-        text = text[:footer_match.start()]
+        text = text[: footer_match.start()]
 
-    text = re.sub(r'(\\w+)-\\s*\\n\\s*(\\w+)', r'\\1\\2', text)
+    text = re.sub(r"(\\w+)-\\s*\\n\\s*(\\w+)", r"\\1\\2", text)
 
     # Remove emails and URLs (any trailing punctuation will be consumed as well)
     text = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", " ", text)
@@ -44,52 +54,84 @@ def process_text(text):
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def parse_pdf(path: str | Path, *, save_md: bool = False) -> tuple[str, float]:
+
+def parse_pdf(data: bytes | bytearray) -> str:
+    """Extract and clean text from a PDF.
+
+    The PDF can be supplied either as raw *bytes* (recommended) or as a local
+    filesystem *path* (``str`` | ``Path``). The latter is kept for backwards
+    compatibility.
+    """
     try:
-        t0 = time.perf_counter()
-        with fitz.open(path) as doc:
-            raw = "".join(page.get_text() for page in doc)
-        elapsed = time.perf_counter() - t0
+        if not data.lstrip().startswith(b"%PDF"):
+            raise ValueError("Invalid PDF header – does not start with %PDF")
+
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            texts: list[str] = []
+            for page_number in range(doc.page_count):
+                try:
+                    page = doc.load_page(page_number)
+                    texts.append(page.get_text("text"))
+                except Exception as page_exc:
+                    logger.warning(
+                        "Skipping page %d due to parsing error: %s",
+                        page_number,
+                        page_exc,
+                    )
+            raw = "".join(texts)
     except Exception as e:
-        logger.error("Cannot parse %s: %s", path, e)
+        logger.error("Cannot parse PDF: %s", e)
         raise
 
-    cleaned = process_text(raw)
-    # Optional debug output: сохранить файл .md рядом с PDF
-    if save_md:
-        base_name = Path(path).stem
-        md_path = Path(path).with_suffix("").with_name(f"{base_name}_pymupdf.md")
-        try:
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(f"# {base_name} (PyMuPDF)\n\n")
-                f.write(f"**Время парсинга:** {elapsed:.3f}s\n\n")
-                f.write(cleaned)
-        except Exception as err:
-            logger.warning("Не удалось записать MD файл %s: %s", md_path, err)
-    return cleaned, elapsed
+    return process_text(raw)
 
-if __name__ == "__main__":
-    import argparse, textwrap, sys
 
-    parser = argparse.ArgumentParser(
-        description="Extract and clean text from PDF files.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("pdf", nargs="+", help="Путь(и) к PDF файлам")
-    parser.add_argument(
-        "--save-md",
-        action="store_true",
-    )
+@retry(
+    stop=stop_after_attempt(getattr(settings, "download_retries", 3)),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=8),
+    retry=retry_if_exception_type(httpx.HTTPError),
+    reraise=True,
+)
+async def _get_with_retry(client: httpx.AsyncClient, url: str) -> bytes:
+    """Download *url* once, raising on any HTTP/client error."""
+    resp = await client.get(url, timeout=30.0)
+    resp.raise_for_status()
+    return resp.content
 
-    args = parser.parse_args()
 
-    for pdf_path in args.pdf:
-        try:
-            cleaned, elapsed = parse_pdf(pdf_path, save_md=args.save_md)
-            print("-" * 80)
-            print(f"{pdf_path} — {len(cleaned.split())} слов, обработано за {elapsed:.2f} c")
-            snippet = cleaned[:500] + ("…" if len(cleaned) > 500 else "")
-            print(snippet)
-        except Exception as exc:
-            print(f"[ERROR] {pdf_path}: {exc}", file=sys.stderr)
-            continue
+async def fetch_and_parse(
+    urls: list[str],
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> list[str | None]:
+    """Download multiple PDF URLs concurrently and return cleaned texts.
+
+    Args:
+        urls: HTTP(S) links pointing to PDF files.
+
+    Returns:
+        List of cleaned document texts (``None`` for failed downloads/parses),
+        preserving the input order.
+    """
+
+    results: list[str | None] = [None] * len(urls)
+    semaphore = asyncio.Semaphore(settings.acl_concurrency)
+
+    async def _worker(i: int, url: str) -> None:
+        async with semaphore:
+            try:
+                pdf_bytes = await _get_with_retry(client, url)
+            except Exception as exc:
+                logger.error("Download failed for %s: %s", url, exc)
+                return
+
+            try:
+                text = parse_pdf(pdf_bytes)
+            except Exception as exc:
+                logger.error("Parsing failed for %s: %s", url, exc)
+                return
+
+            results[i] = text
+
+    await asyncio.gather(*(_worker(i, u) for i, u in enumerate(urls)))
+    return results

@@ -16,6 +16,8 @@ class IndexedDocument(TypedDict, total=False):
     author: list[str]
     url: str
     year: Union[int, str]
+    doi: str
+    pagerank: float
 
 
 class BibEntry(TypedDict):
@@ -25,3 +27,4 @@ class BibEntry(TypedDict):
     title: str
     author: list[str]
     year: Union[int, str]
+    doi: str | None

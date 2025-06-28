@@ -60,6 +60,7 @@ def extract_bib_entries(path: Path) -> list[BibEntry]:
                 "title": latex_to_unicode(entry.fields.get("title")),
                 "year": entry.fields.get("year"),
                 "author": authors if authors else None,
+                "doi": entry.fields.get("doi"),
                 "language": entry.fields.get("language"),
             }
         )
@@ -68,4 +69,4 @@ def extract_bib_entries(path: Path) -> list[BibEntry]:
     df = df[(df["language"] == "eng") | (df["language"].isna())]
     df = df.dropna(subset=["url", "title", "year", "author"])
 
-    return df[["url", "title", "year", "author"]].to_dict(orient="records")
+    return df[["url", "title", "year", "author", "doi"]].to_dict(orient="records")
