@@ -24,18 +24,12 @@ class Settings(BaseSettings):
         Elasticsearch HTTP endpoint.
     top_k
         Number of final documents displayed to the user.
-    knn_k
-        Number of nearest neighbours retrieved from the vector search.
-    knn_candidates
-        Candidate pool size for HNSW during the knn query.
     """
 
     index_name: str = Field("papers", env="INDEX_NAME")
     es_host: str = Field("http://localhost:9200", env="ES_HOST")
 
     top_k: int = Field(5, env="TOP_K")
-    knn_k: int = Field(50, env="KNN_K")
-    knn_candidates: int = Field(100, env="KNN_CANDIDATES")
 
     class Config:
         env_file = ".env"

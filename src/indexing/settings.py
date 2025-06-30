@@ -33,8 +33,6 @@ class Settings(BaseSettings):
         If *true*, drop an existing index with the same name before ingesting.
     es_host
         Elasticsearch HTTP endpoint (single-node setup assumed).
-    openai_base_url, embedding_model_name, embedding_batch_size, openai_api_key
-        See :pyfile:`src.common.settings` – parameters forwarded to the embedding client.
     pagerank_alpha
         Damping factor for PageRank (probability of following citation links).
     bm25_k1
@@ -52,12 +50,6 @@ class Settings(BaseSettings):
     max_entries: Optional[int] = Field(None, env="MAX_ENTRIES")
     force_delete_index: bool = Field(False, env="FORCE_DELETE_INDEX")
     es_host: str = Field("http://localhost:9200", env="ES_HOST")
-
-    openai_base_url: str = Field("http://localhost:8000/v1", env="OPENAI_BASE_URL")
-    embedding_model_name: str = Field(
-        "text-embedding-3-small", env="EMBEDDING_MODEL_NAME"
-    )
-    embedding_batch_size: int = Field(128, env="EMBEDDING_BATCH_SIZE")
 
     openai_api_key: str = Field("not-needed", env="OPENAI_API_KEY")
 

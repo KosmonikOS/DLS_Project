@@ -15,7 +15,6 @@ This script is a cleaned-up, *scriptified* variant of the former
 4.  For every benchmark query the hybrid search pipeline is executed:
 
         – lexical   : BM25 on the ``text`` field
-        – semantic  : k-NN on the ``text_embedding`` field
         – authority : PageRank score (if present)
 
     The three result lists are fused via *Reciprocal Rank Fusion* (RRF).
@@ -41,8 +40,6 @@ from pathlib import Path
 
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
-
-from src.common.dense_embedder import DenseEmbedder
 from src.search.settings import settings
 
 # ---------------------------------------------------------------------------
@@ -66,8 +63,17 @@ QUERY_ARTICLE_DICT: dict[str, list[int]] = {
     "Neural machine translation evaluation methods": [14, 22, 23, 2, 9],
     "generation of visual tables": [18, 19, 20, 3, 10],
     "Context-Vector Analysis": [10, 18, 3, 17, 1],
+    "How does multimodal input affect lexical retrieval?": [29, 31, 32, 33, 18],
+    "Key initiating events in narrative endings": [24, 34, 35, 8, 26],
+    "Semantic Representation": [26, 36, 37, 38, 27],
+    "Challenges in creating LLD resources": [28, 40, 39, 41, 13],
+    "Large language models Semantic Web vocabulary": [41, 39, 40, 30, 22],
+    "What is diachronic lexical semantics?": [30, 44, 42, 43, 39],
+    "How do language models detect dementia from speech?": [33, 45, 46, 31, 19],
+    "What infrastructure is needed for enterprise MT?": [9, 47, 48, 13, 28],
+    "work with multilingual NMT": [14, 9, 49, 29, 20],
+    "Why markup is important": [53, 27, 50, 51, 18],
 }
-
 # ---------------------------------------------------------------------------
 # Helper data structures
 # ---------------------------------------------------------------------------
@@ -223,7 +229,6 @@ def fuse_rrf(
 
 def search_query(
     client: Elasticsearch,
-    embedder: DenseEmbedder,
     query: str,
     top_k: int = 5,
 ) -> list[str]:
@@ -310,7 +315,6 @@ def evaluate() -> None:
     if not client.ping():
         raise SystemExit(f"Cannot connect to Elasticsearch at {settings.es_host}")
 
-    embedder = DenseEmbedder()
     uuid_to_citation = build_uuid_to_citation_map(client, settings.index_name)
 
     # Aggregate containers
@@ -324,7 +328,7 @@ def evaluate() -> None:
         }
         logger.debug("  Relevant citations: %s", relevant_citations)
 
-        retrieved_uuids = search_query(client, embedder, query, top_k=settings.top_k)
+        retrieved_uuids = search_query(client, query, top_k=settings.top_k)
         retrieved_citations: list[str] = [
             uuid_to_citation[uid] for uid in retrieved_uuids if uid in uuid_to_citation
         ]

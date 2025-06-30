@@ -11,7 +11,6 @@ class IndexedDocument(TypedDict, total=False):
     """Canonical schema for documents indexed in Elasticsearch."""
 
     text: str
-    text_embedding: list[float]
     title: str
     author: list[str]
     url: str

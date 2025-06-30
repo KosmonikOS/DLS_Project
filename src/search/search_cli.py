@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from elasticsearch import Elasticsearch
-from src.common.dense_embedder import DenseEmbedder
 from src.search.settings import settings
 from src.search.query_processor import QueryProcessor
 import logging

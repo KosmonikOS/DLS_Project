@@ -1,9 +1,10 @@
 """Thin wrapper around the official Elasticsearch client.
 
-Provides two high-level operations used by the pipeline:
+Provides two high-level operations used by the ingestion pipeline:
 
-* :py:meth:`create_index` – create a text+vector mapping with optional force-delete.
-* :py:meth:`index_documents` – stream bulk requests in configurable batches.
+* :py:meth:`create_index` – create a BM25-optimised text index with optional
+  force-delete.
+* :py:meth:`index_documents` – bulk-ingest documents in configurable batches.
 """
 
 from __future__ import annotations
@@ -63,7 +64,6 @@ class ElasticSearchIndexer:
         self,
         index_name: str,
         force_delete: bool = False,
-        embedding_dim: Optional[int] = None,
         bm25_k1: float = 1.2,
         bm25_b: float = 0.75,
     ) -> None:
@@ -71,8 +71,8 @@ class ElasticSearchIndexer:
 
         Args:
             index_name: Name of the index to create.
-            force_delete: Delete an existing index of the same name before creation.
-            embedding_dim: Dimension of the dense vector for embeddings.
+            force_delete: If *True*, delete an existing index of the same name
+                before creation.
             bm25_k1: BM25 k1 parameter.
             bm25_b: BM25 b parameter.
         """
@@ -96,11 +96,6 @@ class ElasticSearchIndexer:
             "doi": {"type": "keyword"},
             "pagerank": {"type": "float"},
         }
-        if embedding_dim:
-            properties["text_embedding"] = {
-                "type": "dense_vector",
-                "dims": embedding_dim,
-            }
 
         body: dict[str, Any] = {
             "settings": {
@@ -149,7 +144,9 @@ class ElasticSearchIndexer:
             logger.info("Indexed %d documents into '%s'.", len(chunk), index_name)
 
     @staticmethod
-    def _create_synth_id(title: str | None, year: str | int | None, author: list[str] | str | None) -> str:
+    def _create_synth_id(
+        title: str | None, year: str | int | None, author: list[str] | str | None
+    ) -> str:
         """Generate a stable synthetic identifier for a paper without DOI."""
         title_part = (title or "").strip()[:50]
         year_part = str(year or "")
@@ -186,7 +183,9 @@ class ElasticSearchIndexer:
             if doc_doi:
                 internal_id = doc_doi
             else:
-                internal_id = self._create_synth_id(src.get("title"), src.get("year"), src.get("author"))
+                internal_id = self._create_synth_id(
+                    src.get("title"), src.get("year"), src.get("author")
+                )
 
             id_map[internal_id] = hit["_id"]
 
