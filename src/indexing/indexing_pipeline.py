@@ -29,7 +29,7 @@ from src.indexing.entities import IndexedDocument, BibEntry
 from src.indexing.bib_parser import extract_bib_entries
 from src.indexing.settings import settings
 from src.common.dense_embedder import DenseEmbedder
-from .parse import fetch_and_parse
+from src.indexing.parse import fetch_and_parse
 
 logger = logging.getLogger(__name__)
 
@@ -64,15 +64,19 @@ def _process_batch(
     for entry, text in zip(entries, texts):
         if not text:
             continue
-        raw_texts.append(text)
+        # Keep metadata fields separate and embed only the main document text.
+        title_part: str = entry.get("title") or ""
+        author_list = entry.get("author") or []
+
+        raw_texts.append(text)  # embeddings are created from PDF body only
         docs.append(
             {
-                "title": entry.get("title"),
+                "title": title_part or None,
                 "year": entry.get("year"),
                 "url": entry.get("url"),
-                "author": entry.get("author"),
+                "author": author_list or None,
                 "doi": entry.get("doi"),
-                "text": text,
+                "text": text,  # BM25 body
             }
         )
 
@@ -82,57 +86,6 @@ def _process_batch(
             doc["text_embedding"] = emb
 
     return docs
-
-
-def ingest_bib() -> None:
-    """Ingest PDFs referenced in the configured BibTeX file into Elasticsearch.
-
-    All parameters are sourced from *src.indexing.settings.settings* which in turn
-    reads environment variables (or a ``.env`` file).
-    """
-
-    bib_file = settings.bib_file
-    index_name = settings.index_name
-    batch_size = settings.batch_size
-    force_delete_index = settings.force_delete_index
-    es_host = settings.es_host
-    max_entries = settings.max_entries
-
-    entries = extract_bib_entries(bib_file)
-    if max_entries is not None and max_entries > 0:
-        entries = entries[:max_entries]
-    if not entries:
-        logger.warning("No entries with a URL found in %s", bib_file)
-        return
-
-    indexer = ElasticSearchIndexer(es_host)
-    index_created = False
-
-    for entry in entries:
-        if not entry["url"].endswith(".pdf"):
-            entry["url"] = entry["url"].rstrip("/") + ".pdf"
-
-    with tqdm(total=len(entries), desc="Ingesting PDF batches", unit="doc") as progress:
-        embedder = DenseEmbedder()
-        for batch_entries in batched(entries, batch_size):
-            docs = _process_batch(list(batch_entries), embedder)
-            if not docs:
-                progress.update(len(batch_entries))
-                continue
-
-            if not index_created:
-                dim = len(docs[0]["text_embedding"])
-                indexer.create_index(
-                    index_name,
-                    force_delete=force_delete_index,
-                    embedding_dim=dim,
-                    bm25_k1=settings.bm25_k1,
-                    bm25_b=settings.bm25_b,
-                )
-                index_created = True
-
-            indexer.index_documents(index_name, docs, batch_size=len(docs))
-            progress.update(len(batch_entries))
 
 
 async def _process_batch_async(
@@ -168,15 +121,19 @@ async def _process_batch_async(
     for entry, text in zip(entries, texts):
         if not text:
             continue
-        raw_texts.append(text)
+        # Keep metadata fields separate and embed only the main document text.
+        title_part: str = entry.get("title") or ""
+        author_list = entry.get("author") or []
+
+        raw_texts.append(text)  # embeddings are created from PDF body only
         docs.append(
             {
-                "title": entry.get("title"),
+                "title": title_part,
                 "year": entry.get("year"),
                 "url": entry.get("url"),
-                "author": entry.get("author"),
+                "author": author_list,
                 "doi": entry.get("doi"),
-                "text": text,
+                "text": text,  # BM25 body
             }
         )
 

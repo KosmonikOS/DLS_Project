@@ -173,19 +173,6 @@ def _bm25_body(query: str, size: int) -> dict:
     }
 
 
-def _knn_body(query_vector: list[float]) -> dict:
-    return {
-        "knn": {
-            "field": "text_embedding",
-            "query_vector": query_vector,
-            "k": settings.knn_k,
-            "num_candidates": settings.knn_candidates,
-        },
-        "size": settings.knn_k,
-        "_source": ["pagerank"],
-    }
-
-
 def _rrf(rank: int, k: int) -> float:
     """Reciprocal Rank Fusion helper: ``1 / (k + rank)``."""
 
@@ -194,17 +181,15 @@ def _rrf(rank: int, k: int) -> float:
 
 def fuse_rrf(
     bm25_hits: list[dict],
-    knn_hits: list[dict],
     window_size: int,
     top_k: int,
 ) -> list[dict]:
-    """Fuse BM25, k-NN and PageRank rankings via RRF."""
+    """Fuse BM25 and PageRank rankings via RRF."""
 
     scores: dict[str, float] = defaultdict(float)
     doc_store: dict[str, dict] = {}
 
     bm25_rank: dict[str, int] = {}
-    knn_rank: dict[str, int] = {}
     pr_rank: dict[str, int] = {}
 
     # Collect BM25 ranks
@@ -212,12 +197,6 @@ def fuse_rrf(
         doc_id = hit["_id"]
         doc_store[doc_id] = hit
         bm25_rank[doc_id] = r
-
-    # Collect k-NN ranks
-    for r, hit in enumerate(knn_hits, 1):
-        doc_id = hit["_id"]
-        doc_store.setdefault(doc_id, hit)
-        knn_rank[doc_id] = r
 
     # Compute PageRank ranks (smaller rank = higher score)
     pageranks = {
@@ -235,8 +214,6 @@ def fuse_rrf(
     for doc_id in doc_store:
         if doc_id in bm25_rank:
             scores[doc_id] += _rrf(bm25_rank[doc_id], window_size)
-        # if doc_id in knn_rank:
-        #     scores[doc_id] += _rrf(knn_rank[doc_id], window_size)
         if doc_id in pr_rank:
             scores[doc_id] += _rrf(pr_rank[doc_id], window_size)
 
@@ -250,23 +227,15 @@ def search_query(
     query: str,
     top_k: int = 5,
 ) -> list[str]:
-    """Execute hybrid search for *query* and return list of Elasticsearch UUIDs."""
+    """Execute search for *query* using only BM25 and PageRank, returning list of Elasticsearch UUIDs."""
 
-    query_vector = embedder.embed_query(query)
-    window_size = max(settings.knn_k, top_k)
+    window_size = max(top_k, 10)
 
     bm25_hits = client.search(
         index=settings.index_name, body=_bm25_body(query, window_size)
     )["hits"]["hits"]
 
-    knn_hits = client.search(index=settings.index_name, body=_knn_body(query_vector))[
-        "hits"
-    ]["hits"]
-
-    if not bm25_hits and not knn_hits:
-        return []
-
-    fused_hits = fuse_rrf(bm25_hits, knn_hits, window_size, top_k)
+    fused_hits = fuse_rrf(bm25_hits, window_size, top_k)
     return [h["_id"] for h in fused_hits]
 
 

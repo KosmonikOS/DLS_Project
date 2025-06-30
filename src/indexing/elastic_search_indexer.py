@@ -20,6 +20,7 @@ from itertools import batched
 from src.indexing.entities import IndexedDocument
 
 import hashlib
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,23 @@ class ElasticSearchIndexer:
         Raises:
             ElasticsearchConnectionError: If the cluster is unreachable.
         """
-        self._client = Elasticsearch(hosts)
-        if not self._client.ping():
-            raise ElasticsearchConnectionError(
-                f"Unable to connect to Elasticsearch at {hosts}"
-            )
+        self._client = Elasticsearch(hosts, request_timeout=10)
+
+        # Elasticsearch container may still be starting – retry a few times
+        for attempt in range(6):  # ~30 s total
+            try:
+                if self._client.ping():
+                    break
+            except Exception:
+                pass
+
+            if attempt == 5:
+                raise ElasticsearchConnectionError(
+                    f"Unable to connect to Elasticsearch at {hosts}"
+                )
+
+            logger.info("ES ping failed (attempt %d/6); retrying in 5s…", attempt + 1)
+            time.sleep(5)
 
     def create_index(
         self,
